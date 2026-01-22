@@ -26,6 +26,15 @@
 #define BLACK   0x0000
 #define WHITE   0xFFFF
 
+// Enhanced color palette - more distinct and vibrant
+#define COLOR_CPU    0xF800   // Bright Red
+#define COLOR_RAM    0x07FF   // Cyan (more visible than dark blue)
+#define COLOR_GPU    0xF81F   // Magenta/Purple
+#define COLOR_VRAM   0xFD20   // Orange
+
+// Background grid color for better depth
+#define COLOR_GRID   0x18C3   // Dark gray
+
 // --- Complete 5x7 ASCII Font ---
 const uint8_t font5x7[][5] = {
   {0x00, 0x00, 0x00, 0x00, 0x00}, // space (32)
@@ -106,11 +115,6 @@ uint8_t max_net_up = 1, max_net_down = 1;
 uint8_t graph_cpu[GRAPH_WIDTH], graph_ram[GRAPH_WIDTH], graph_gpu[GRAPH_WIDTH], graph_vram[GRAPH_WIDTH];
 uint8_t graph_index = 0, update_counter = 0;
 
-#define COLOR_CPU    0xF800   // kırmızı (değişmedi)
-#define COLOR_RAM    0x001F   // mavi
-#define COLOR_GPU    0xFFE0   // sarı (değişmedi, istersen başka yaparız)
-#define COLOR_VRAM   0xFD60   // turuncu (yaklaşık #FF8C00)
-
 // --- SPI & Display Functions ---
 void writeCmd(uint8_t c) {
   digitalWrite(TFT_DC, LOW); digitalWrite(TFT_CS, LOW);
@@ -137,7 +141,6 @@ void fillRect(uint8_t x, uint8_t y, uint8_t w, uint8_t h, uint16_t color) {
   digitalWrite(TFT_CS, HIGH);
 }
 
-// Flicker-Free Char: Draws background pixels instead of clearing
 void drawCharOpaque(uint8_t x, uint8_t y, char c, uint16_t color, uint16_t bg) {
   if (c < 32 || c > 95) return;
   uint8_t idx = c - 32;
@@ -160,43 +163,57 @@ void drawHalfRow(uint8_t row, bool left, const char* label, uint8_t value, uint1
   uint8_t x = left ? 0 : (W / 2);
   uint8_t y = row * ROW_HEIGHT;
   
-  // Draw label and value using Opaque text (No fillRect call needed)
   drawTextOpaque(x + 2, y + 1, label, textColor, BLACK);
   uint8_t displayVal = (value > 99) ? 99 : value;
   char buf[3]; sprintf(buf, "%02d", displayVal);
   drawTextOpaque(x + 10, y + 1, buf, WHITE, BLACK);
   
-  // Bar area differential update
   uint8_t barStartX = x + 22;
   uint8_t barMaxWidth = (W/2) - 24;
   uint8_t barWidth = (displayVal * barMaxWidth) / maxVal;
   if (barWidth > barMaxWidth) barWidth = barMaxWidth;
   
-  if (barWidth > 0) fillRect(barStartX, y + 2, barWidth, 6, WHITE);
+  // Draw bar with gradient effect using color
+  if (barWidth > 0) fillRect(barStartX, y + 2, barWidth, 6, textColor);
   if (barWidth < barMaxWidth) fillRect(barStartX + barWidth, y + 2, barMaxWidth - barWidth, 6, BLACK);
 }
 
-// Optimized Graph: No full clear, draws column by column
+// New layered graph approach - draws each metric separately with spacing
 void drawGraph() {
+  // Draw subtle grid lines first (every 25%)
+  for (uint8_t i = 1; i < 4; i++) {
+    uint8_t gridY = GRAPH_Y + (i * GRAPH_HEIGHT / 4);
+    for (uint8_t x = 0; x < GRAPH_WIDTH; x += 4) {
+      fillRect(x, gridY, 2, 1, COLOR_GRID);
+    }
+  }
+  
+  // Draw each metric as separate line graph from right to left
   for (uint8_t x = 0; x < GRAPH_WIDTH; x++) {
     uint8_t screenX = GRAPH_WIDTH - 1 - x;
     uint8_t idx = (graph_index - x + GRAPH_WIDTH) % GRAPH_WIDTH;
-    uint8_t prevIdx = (graph_index - x - 1 + GRAPH_WIDTH) % GRAPH_WIDTH;
+    
+    // Calculate Y positions for each metric (inverted, 0% at bottom)
+    uint8_t yCPU = GRAPH_Y + GRAPH_HEIGHT - 1 - (graph_cpu[idx] * (GRAPH_HEIGHT - 1) / 100);
+    uint8_t yRAM = GRAPH_Y + GRAPH_HEIGHT - 1 - (graph_ram[idx] * (GRAPH_HEIGHT - 1) / 100);
+    uint8_t yGPU = GRAPH_Y + GRAPH_HEIGHT - 1 - (graph_gpu[idx] * (GRAPH_HEIGHT - 1) / 100);
+    uint8_t yVRAM = GRAPH_Y + GRAPH_HEIGHT - 1 - (graph_vram[idx] * (GRAPH_HEIGHT - 1) / 100);
+    
+    // Draw individual pixels for each metric (non-overlapping points)
+    if (graph_cpu[idx] > 0) fillRect(screenX, yCPU, 1, 2, COLOR_CPU);
+    if (graph_ram[idx] > 0) fillRect(screenX, yRAM, 1, 2, COLOR_RAM);
+    if (graph_gpu[idx] > 0) fillRect(screenX, yGPU, 1, 2, COLOR_GPU);
+    if (graph_vram[idx] > 0) fillRect(screenX, yVRAM, 1, 2, COLOR_VRAM);
+  }
+}
 
-    // Clear only this vertical column
-    fillRect(screenX, GRAPH_Y, 1, GRAPH_HEIGHT, BLACK);
-
-    auto drawSegment = [&](uint8_t val1, uint8_t val2, uint16_t color) {
-      uint8_t y1 = GRAPH_Y + GRAPH_HEIGHT - 1 - (val1 * (GRAPH_HEIGHT - 2) / 100);
-      uint8_t y2 = GRAPH_Y + GRAPH_HEIGHT - 1 - (val2 * (GRAPH_HEIGHT - 2) / 100);
-      fillRect(screenX, min(y1, y2), 1, abs(y1 - y2) + 2, color); // +2 for thickness
-    };
-
-    drawSegment(graph_vram[prevIdx], graph_vram[idx], COLOR_VRAM);   // turuncu
-    drawSegment(graph_gpu[prevIdx], graph_gpu[idx], COLOR_GPU);
-    drawSegment(graph_ram[prevIdx], graph_ram[idx], COLOR_RAM);     // mavi
-    drawSegment(graph_cpu[prevIdx], graph_cpu[idx], COLOR_CPU);
-    }
+void drawGraphBackground() {
+  // Clear graph area
+  fillRect(GRAPH_X, GRAPH_Y, GRAPH_WIDTH, GRAPH_HEIGHT, BLACK);
+  
+  // Draw border around graph
+  fillRect(GRAPH_X, GRAPH_Y, GRAPH_WIDTH, 1, COLOR_GRID);
+  fillRect(GRAPH_X, GRAPH_Y + GRAPH_HEIGHT - 1, GRAPH_WIDTH, 1, COLOR_GRID);
 }
 
 void setup() {
@@ -217,6 +234,7 @@ void setup() {
   writeCmd(ST7735_DISPON);
 
   fillRect(0, 0, W, H, BLACK);
+  drawGraphBackground();
 }
 
 void loop() {
@@ -239,13 +257,15 @@ void loop() {
       if (data.net_down > max_net_down) max_net_down = data.net_down;
       
       update_counter++;
-      if (update_counter >= 2) { // 1 Second update for graph
+      if (update_counter >= 2) {
         update_counter = 0;
         graph_index = (graph_index + 1) % GRAPH_WIDTH;
         graph_cpu[graph_index] = data.cpu_usage;
         graph_ram[graph_index] = data.ram_usage;
         graph_gpu[graph_index] = data.gpu_usage;
         graph_vram[graph_index] = data.vram_usage;
+        
+        drawGraphBackground();
         drawGraph();
       }
       
