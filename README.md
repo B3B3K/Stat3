@@ -32,3 +32,5 @@ This project displays real-time system performance metrics from a computer on a 
 | GND       | GND                  |
 
 **Note:** ESPC3-OLED and ST7735s boards are very compatible with each other, keep pinouts in eye while shopping for this project.
+**Note:** CPP compiled program ready to use or u can compile it via 
+**g++ -o server.exe server.cpp -lpdh -static-libgcc -static-libstdc++ -O2**
